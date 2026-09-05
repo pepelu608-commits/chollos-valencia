@@ -1,7 +1,7 @@
 name: Chollos - portales cada hora
 on:
   schedule:
-    - cron: "5 * * * *"      # cada hora, minuto 5
+    - cron: "5 * * * *"
   workflow_dispatch:
 jobs:
   buscar:
@@ -11,7 +11,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt
-      - run: python bot.py --solo-email
+      - run: python bot.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
