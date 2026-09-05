@@ -3,23 +3,19 @@ import sys
 import traceback
 
 from comun import PRECIO_MAX, es_municipio_ok, guardar, avisar_telegram
-from fuentes import alertas_email, boe
+from fuentes import alertas_email
 
-FUENTES = [("Alertas Idealista/Fotocasa", alertas_email.obtener), ("Subastas BOE", boe.obtener)]
+FUENTES = [("Alertas portales (Idealista, Fotocasa, habitaclia, pisos.com, yaencontre)", alertas_email.obtener)]
 
 if __name__ == "__main__":
     solo_prueba = "--prueba" in sys.argv
-    if "--solo-email" in sys.argv:
-        FUENTES = [FUENTES[0]]
-    if "--solo-boe" in sys.argv:
-        FUENTES = [FUENTES[1]]
     total, nuevos, chollos = 0, 0, 0
     for nombre, fn in FUENTES:
         try:
             anuncios = fn()
         except Exception:
             print(f"[{nombre}] ERROR:"); traceback.print_exc(); continue
-        print(f"[{nombre}] {len(anuncios)} anuncios leídos")
+        print(f"[{nombre}] {len(anuncios)} anuncios leidos")
         for a in anuncios:
             if not a.get("precio") or a["precio"] > PRECIO_MAX:
                 continue
@@ -27,7 +23,7 @@ if __name__ == "__main__":
                 continue
             total += 1
             if solo_prueba:
-                print("  ", a.get("titulo"), a.get("precio"), "€", a.get("url")); continue
+                print("  ", a.get("titulo"), a.get("precio"), "EUR", a.get("url")); continue
             guardado, motivo = guardar(a)
             nuevos += 1
             if motivo:

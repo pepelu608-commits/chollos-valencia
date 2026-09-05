@@ -1,5 +1,5 @@
-"""Puntuación de chollo 0-100. Combina descuento frente a la zona, bajadas de precio,
-días publicado y palabras clave. Devuelve (puntos, lista_de_motivos)."""
+"""Puntuacion de chollo 0-100. Combina descuento frente a la zona, bajadas de precio,
+dias publicado y palabras clave. Devuelve (puntos, lista_de_motivos)."""
 import re
 from datetime import datetime, timezone
 
@@ -28,15 +28,12 @@ def puntuar(a, dias_publicado=0, bajada_pct=0.0):
         puntos += 40; motivos.append(f"{d:.0f}% por debajo de la media de la zona")
     elif d >= 10:
         puntos += 20; motivos.append(f"{d:.0f}% por debajo de la media de la zona")
-    db = a.get("descuento_boe") or 0
-    if db >= 30:
-        puntos += 45; motivos.append(f"puja mínima un {db:.0f}% bajo tasación")
     if bajada_pct >= 15:
         puntos += 25; motivos.append(f"bajada de precio del {bajada_pct:.0f}%")
     elif bajada_pct >= 8:
         puntos += 15; motivos.append(f"bajada de precio del {bajada_pct:.0f}%")
     if dias_publicado >= 90:
-        puntos += 10; motivos.append(f"{dias_publicado} días publicado")
+        puntos += 10; motivos.append(f"{dias_publicado} dias publicado")
     elif dias_publicado >= 45:
         puntos += 5
     texto = " ".join(str(a.get(k) or "") for k in ("titulo", "texto", "alertas")).lower()

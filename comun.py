@@ -1,4 +1,4 @@
-"""Funciones compartidas: configuración, Supabase, Telegram y cálculo de chollos."""
+"""Funciones compartidas: configuracion, Supabase, Telegram y calculo de chollos."""
 import os
 import re
 import statistics
@@ -34,7 +34,6 @@ def es_municipio_ok(texto):
 
 
 def numero(txt):
-    """'245.000 €' -> 245000 ; '87 m²' -> 87"""
     if txt is None:
         return None
     s = re.sub(r"[^\d]", "", str(txt))
@@ -42,7 +41,7 @@ def numero(txt):
 
 
 def media_zona(municipio, tipo):
-    """Mediana de €/m² de los anuncios que ya tenemos en esa zona (mínimo 5)."""
+    """Mediana de EUR/m2 de los anuncios que ya tenemos en esa zona (minimo 5)."""
     r = (
         db().table("anuncios")
         .select("precio_m2")
@@ -57,8 +56,7 @@ def media_zona(municipio, tipo):
 
 
 def _grupo(anuncio):
-    """Clave para detectar el mismo piso publicado en varios portales:
-    mismo municipio, misma superficie y precio parecido (±2%)."""
+    """Clave para detectar el mismo piso en varios portales: municipio + superficie + precio parecido."""
     if not anuncio.get("superficie") or not anuncio.get("precio"):
         return None
     muni = re.sub(r"\W", "", (anuncio.get("municipio") or "").lower())[:12]
@@ -75,7 +73,6 @@ def guardar(anuncio):
     if media and anuncio.get("precio_m2"):
         anuncio["descuento_pct"] = round(100 * (1 - anuncio["precio_m2"] / media), 1)
     anuncio["grupo"] = _grupo(anuncio)
-    descuento_boe = anuncio.pop("descuento_boe", None)
     texto = anuncio.pop("texto", None)
 
     existente = db().table("anuncios").select("*").eq("id", anuncio["id"]).execute().data
@@ -88,7 +85,7 @@ def guardar(anuncio):
         if viejo["precio"] and anuncio.get("precio") and anuncio["precio"] < viejo["precio"]:
             bajada = 100 * (1 - anuncio["precio"] / viejo["precio"])
             anuncio["precio_anterior"] = viejo["precio"]
-    puntos, motivos = puntuar({**anuncio, "descuento_boe": descuento_boe, "texto": texto}, dias, bajada)
+    puntos, motivos = puntuar({**anuncio, "texto": texto}, dias, bajada)
     anuncio["puntos"] = puntos
     anuncio["motivos"] = "; ".join(motivos) or None
     anuncio["fecha_actualizacion"] = ahora
@@ -96,36 +93,35 @@ def guardar(anuncio):
     motivo_aviso = None
     ya_avisado = existente and existente[0].get("avisado")
     if puntos >= UMBRAL_PUNTOS and not ya_avisado:
-        motivo_aviso = f"Puntuación {puntos}/100 · " + "; ".join(motivos)
+        motivo_aviso = f"Puntuacion {puntos}/100 - " + "; ".join(motivos)
     elif bajada >= UMBRAL_BAJADA:
-        motivo_aviso = f"Bajada del {bajada:.0f}% ({existente[0]['precio']:,} € → {anuncio['precio']:,} €)".replace(",", ".")
+        motivo_aviso = f"Bajada del {bajada:.0f}% ({existente[0]['precio']:,} EUR -> {anuncio['precio']:,} EUR)".replace(",", ".")
 
     if existente:
         db().table("anuncios").update(anuncio).eq("id", anuncio["id"]).execute()
     else:
         db().table("anuncios").insert(anuncio).execute()
-    # otros portales con el mismo piso
     if anuncio["grupo"]:
         otros = db().table("anuncios").select("fuente,precio").eq("grupo", anuncio["grupo"]).neq("id", anuncio["id"]).execute().data
         if otros:
-            anuncio["tambien_en"] = ", ".join(f"{o['fuente']} ({o['precio']:,} €)".replace(",", ".") for o in otros)
+            anuncio["tambien_en"] = ", ".join(f"{o['fuente']} ({o['precio']:,} EUR)".replace(",", ".") for o in otros)
     return anuncio, motivo_aviso
 
 
 def avisar_telegram(anuncio, motivo):
     token = os.environ["TELEGRAM_TOKEN"]
     chat = os.environ["TELEGRAM_CHAT_ID"]
-    precio = f"{anuncio['precio']:,} €".replace(",", ".") if anuncio.get("precio") else "sin precio"
-    sup = f" · {anuncio['superficie']} m²" if anuncio.get("superficie") else ""
-    m2 = f" · {anuncio['precio_m2']:,} €/m²".replace(",", ".") if anuncio.get("precio_m2") else ""
+    precio = f"{anuncio['precio']:,} EUR".replace(",", ".") if anuncio.get("precio") else "sin precio"
+    sup = f" - {anuncio['superficie']} m2" if anuncio.get("superficie") else ""
+    m2 = f" - {anuncio['precio_m2']:,} EUR/m2".replace(",", ".") if anuncio.get("precio_m2") else ""
     texto = (
-        f"🔥 CHOLLO ({anuncio['fuente']})\n"
+        f"CHOLLO ({anuncio['fuente']})\n"
         f"{anuncio.get('titulo') or 'Vivienda'}\n"
-        f"📍 {anuncio.get('municipio') or ''} {anuncio.get('zona') or ''}\n"
-        f"💶 {precio}{sup}{m2}\n"
-        f"✅ {motivo}\n"
-        + (f"🔁 También en: {anuncio['tambien_en']}\n" if anuncio.get("tambien_en") else "")
-        + (f"⚠️ {anuncio['alertas']}\n" if anuncio.get("alertas") else "")
+        f"Zona: {anuncio.get('municipio') or ''} {anuncio.get('zona') or ''}\n"
+        f"Precio: {precio}{sup}{m2}\n"
+        f"Motivo: {motivo}\n"
+        + (f"Tambien en: {anuncio['tambien_en']}\n" if anuncio.get("tambien_en") else "")
+        + (f"Aviso: {anuncio['alertas']}\n" if anuncio.get("alertas") else "")
         + f"{anuncio.get('url') or ''}"
     )
     requests.post(
