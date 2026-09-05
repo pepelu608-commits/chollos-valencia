@@ -1,0 +1,24 @@
+name: Chollos - subastas BOE diario
+on:
+  schedule:
+    - cron: "30 6 * * *"     # 08:30 hora de España (verano)
+  workflow_dispatch:
+jobs:
+  buscar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt
+      - run: python bot.py --solo-boe
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          PRECIO_MAX: "350000"
+          UMBRAL_PUNTOS: "70"
+          UMBRAL_BAJADA: "10"
