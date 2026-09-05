@@ -1,0 +1,87 @@
+"""Lee los emails de alerta de Idealista y Fotocasa de la cuenta de Gmail dedicada
+y extrae los anuncios. Es la forma legal de usar esos portales: son sus propios avisos."""
+import email
+import imaplib
+import os
+import re
+from email.header import decode_header
+
+from bs4 import BeautifulSoup
+
+PORTALES = {
+    "idealista": {"remitente": "idealista", "dominio": "idealista.com"},
+    "fotocasa": {"remitente": "fotocasa", "dominio": "fotocasa.es"},
+    "habitaclia": {"remitente": "habitaclia", "dominio": "habitaclia.com"},
+    "pisos.com": {"remitente": "pisos.com", "dominio": "pisos.com"},
+    "yaencontre": {"remitente": "yaencontre", "dominio": "yaencontre.com"},
+}
+
+
+def _html_del_mensaje(msg):
+    for parte in msg.walk():
+        if parte.get_content_type() == "text/html":
+            carga = parte.get_payload(decode=True)
+            return carga.decode(parte.get_content_charset() or "utf-8", errors="ignore")
+    return ""
+
+
+def _extraer_anuncios(html, portal, dominio):
+    """Recorre los enlaces del email que apuntan a un anuncio y lee el texto cercano."""
+    soup = BeautifulSoup(html, "html.parser")
+    anuncios = {}
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if dominio not in href or not re.search(r"/inmueble/\d+|/vivienda/|/\d{6,}", href):
+            continue
+        # id estable: los números largos del enlace
+        m = re.search(r"(\d{6,})", href)
+        if not m:
+            continue
+        aid = f"{portal}-{m.group(1)}"
+        # bloque de texto que rodea al enlace (la "tarjeta" del anuncio)
+        bloque = a
+        for _ in range(4):
+            if bloque.parent and len(bloque.parent.get_text(" ", strip=True)) < 600:
+                bloque = bloque.parent
+        texto = bloque.get_text(" ", strip=True)
+        precio = re.search(r"(\d{2,3}(?:\.\d{3})+|\d{5,7})\s*€", texto)
+        sup = re.search(r"(\d{2,4})\s*m[²2]", texto)
+        hab = re.search(r"(\d)\s*hab", texto)
+        titulo = re.search(r"(Piso|Ático|Casa|Chalet|Dúplex|Estudio|Apartamento|Adosad[oa]|Loft)[^€]{0,80}", texto)
+        anuncio = anuncios.setdefault(aid, {"id": aid, "fuente": portal, "url": href.split("?")[0], "tipo": "vivienda"})
+        if precio and not anuncio.get("precio"):
+            anuncio["precio"] = int(precio.group(1).replace(".", ""))
+        if sup and not anuncio.get("superficie"):
+            anuncio["superficie"] = int(sup.group(1))
+        if hab and not anuncio.get("habitaciones"):
+            anuncio["habitaciones"] = int(hab.group(1))
+        if titulo and not anuncio.get("titulo"):
+            anuncio["titulo"] = titulo.group(0).strip()[:120]
+            anuncio["municipio"] = _municipio(titulo.group(0))
+        anuncio["texto"] = (anuncio.get("texto", "") + " " + texto)[:1500]
+    return [a for a in anuncios.values() if a.get("precio")]
+
+
+def _municipio(titulo):
+    m = re.search(r" en ([A-ZÀ-ÿ][\wÀ-ÿ' -]+?)(?:,|$| \d)", titulo)
+    return m.group(1).strip() if m else "Valencia"
+
+
+def obtener():
+    usuario = os.environ["GMAIL_USER"]
+    clave = os.environ["GMAIL_APP_PASSWORD"]
+    correo = imaplib.IMAP4_SSL("imap.gmail.com")
+    correo.login(usuario, clave)
+    correo.select("INBOX")
+    resultado = []
+    for portal, cfg in PORTALES.items():
+        _, datos = correo.search(None, f'(UNSEEN FROM "{cfg["remitente"]}")')
+        for num in datos[0].split():
+            _, contenido = correo.fetch(num, "(RFC822)")
+            msg = email.message_from_bytes(contenido[0][1])
+            html = _html_del_mensaje(msg)
+            encontrados = _extraer_anuncios(html, portal, cfg["dominio"])
+            resultado.extend(encontrados)
+            correo.store(num, "+FLAGS", "\\Seen")
+    correo.logout()
+    return resultado
