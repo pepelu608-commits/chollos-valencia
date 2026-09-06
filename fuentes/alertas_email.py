@@ -43,8 +43,9 @@ def _extraer_anuncios(html, portal, dominio):
         precio = re.search(r"(\d{2,3}(?:\.\d{3})+|\d{5,7})\s*€", texto)
         sup = re.search(r"(\d{2,4})\s*m[²2]", texto)
         hab = re.search(r"(\d)\s*hab", texto)
-        titulo = re.search(r"(Piso|Bajo|Planta baja|Apartamento|Ático|Dúplex|Estudio|Loft|Casa|Chalet|Adosad[oa])[^€]{0,80}", texto)
-        anuncio = anuncios.setdefault(aid, {"id": aid, "fuente": portal, "url": href.split("?")[0], "tipo": "vivienda"})
+        titulo = re.search(r"(Piso|Bajo|Planta baja|Apartamento|Ático|Dúplex|Estudio|Loft|Casa|Chalet|Adosad[oa]|Local|Nave|Oficina)[^€]{0,80}", texto)
+        tipo = "local" if titulo and titulo.group(1) in ("Local", "Nave", "Oficina") else "vivienda"
+        anuncio = anuncios.setdefault(aid, {"id": aid, "fuente": portal, "url": href.split("?")[0], "tipo": tipo})
         if precio and not anuncio.get("precio"):
             anuncio["precio"] = int(precio.group(1).replace(".", ""))
         if sup and not anuncio.get("superficie"):
