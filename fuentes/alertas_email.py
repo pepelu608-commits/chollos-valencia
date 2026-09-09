@@ -1,9 +1,9 @@
-"""Lee los emails de alerta de los portales (Idealista, Fotocasa, habitaclia, pisos.com, yaencontre)
-de la cuenta de Gmail dedicada y extrae los anuncios. Forma legal de usar los portales: son sus propios avisos."""
+"""Lee los emails de alerta de los portales y extrae los anuncios."""
 import email
 import imaplib
 import os
 import re
+from email.header import decode_header
 
 from bs4 import BeautifulSoup
 
@@ -16,6 +16,13 @@ PORTALES = {
 }
 
 
+def _asunto(msg):
+    salida = ""
+    for texto, cod in decode_header(msg.get("Subject", "")):
+        salida += texto.decode(cod or "utf-8", errors="ignore") if isinstance(texto, bytes) else texto
+    return salida
+
+
 def _html_del_mensaje(msg):
     for parte in msg.walk():
         if parte.get_content_type() == "text/html":
@@ -24,7 +31,7 @@ def _html_del_mensaje(msg):
     return ""
 
 
-def _extraer_anuncios(html, portal, dominio):
+def _extraer_anuncios(html, portal, dominio, es_bajada=False):
     soup = BeautifulSoup(html, "html.parser")
     anuncios = {}
     for a in soup.find_all("a", href=True):
@@ -45,7 +52,7 @@ def _extraer_anuncios(html, portal, dominio):
         hab = re.search(r"(\d)\s*hab", texto)
         titulo = re.search(r"(Piso|Bajo|Planta baja|Apartamento|Ático|Dúplex|Estudio|Loft|Casa|Chalet|Adosad[oa]|Local|Nave|Oficina)[^€]{0,80}", texto)
         tipo = "local" if titulo and titulo.group(1) in ("Local", "Nave", "Oficina") else "vivienda"
-        anuncio = anuncios.setdefault(aid, {"id": aid, "fuente": portal, "url": href.split("?")[0], "tipo": tipo})
+        anuncio = anuncios.setdefault(aid, {"id": aid, "fuente": portal, "url": href.split("?")[0], "tipo": tipo, "bajada_anunciada": es_bajada})
         if precio and not anuncio.get("precio"):
             anuncio["precio"] = int(precio.group(1).replace(".", ""))
         if sup and not anuncio.get("superficie"):
@@ -65,10 +72,8 @@ def _municipio(titulo):
 
 
 def obtener():
-    usuario = os.environ["GMAIL_USER"]
-    clave = os.environ["GMAIL_APP_PASSWORD"]
     correo = imaplib.IMAP4_SSL("imap.gmail.com")
-    correo.login(usuario, clave)
+    correo.login(os.environ["GMAIL_USER"], os.environ["GMAIL_APP_PASSWORD"])
     correo.select("INBOX")
     resultado = []
     for portal, cfg in PORTALES.items():
@@ -76,8 +81,8 @@ def obtener():
         for num in datos[0].split():
             _, contenido = correo.fetch(num, "(RFC822)")
             msg = email.message_from_bytes(contenido[0][1])
-            html = _html_del_mensaje(msg)
-            resultado.extend(_extraer_anuncios(html, portal, cfg["dominio"]))
+            es_bajada = bool(re.search(r"bajada de precio|baja de precio|ha bajado", _asunto(msg), re.I))
+            resultado.extend(_extraer_anuncios(_html_del_mensaje(msg), portal, cfg["dominio"], es_bajada))
             correo.store(num, "+FLAGS", "\\Seen")
     correo.logout()
     return resultado
