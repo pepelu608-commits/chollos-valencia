@@ -13,7 +13,6 @@ from puntuacion import puntuar, dias_desde
 load_dotenv()
 
 PRECIO_MAX = int(os.getenv("PRECIO_MAX", "350000"))
-UMBRAL_DESCUENTO = float(os.getenv("UMBRAL_DESCUENTO", "20"))
 UMBRAL_BAJADA = float(os.getenv("UMBRAL_BAJADA", "10"))
 UMBRAL_PUNTOS = int(os.getenv("UMBRAL_PUNTOS", "70"))
 MUNICIPIOS = [m.strip().lower() for m in os.getenv("MUNICIPIOS", "valencia").split(",")]
@@ -33,15 +32,7 @@ def es_municipio_ok(texto):
     return any(m in t for m in MUNICIPIOS)
 
 
-def numero(txt):
-    if txt is None:
-        return None
-    s = re.sub(r"[^\d]", "", str(txt))
-    return int(s) if s else None
-
-
 def media_zona(municipio, tipo):
-    """Mediana de EUR/m2 de los anuncios que ya tenemos en esa zona (minimo 5)."""
     r = (
         db().table("anuncios")
         .select("precio_m2")
@@ -56,7 +47,6 @@ def media_zona(municipio, tipo):
 
 
 def _grupo(anuncio):
-    """Clave para detectar el mismo piso en varios portales: municipio + superficie + precio parecido."""
     if not anuncio.get("superficie") or not anuncio.get("precio"):
         return None
     muni = re.sub(r"\W", "", (anuncio.get("municipio") or "").lower())[:12]
@@ -64,7 +54,6 @@ def _grupo(anuncio):
 
 
 def guardar(anuncio):
-    """Inserta o actualiza. Devuelve (anuncio_guardado, motivo_aviso o None)."""
     ahora = datetime.now(timezone.utc).isoformat()
     if anuncio.get("precio") and anuncio.get("superficie"):
         anuncio["precio_m2"] = round(anuncio["precio"] / anuncio["superficie"])
@@ -74,6 +63,7 @@ def guardar(anuncio):
         anuncio["descuento_pct"] = round(100 * (1 - anuncio["precio_m2"] / media), 1)
     anuncio["grupo"] = _grupo(anuncio)
     texto = anuncio.pop("texto", None)
+    bajada_anunciada = anuncio.pop("bajada_anunciada", False)
 
     existente = db().table("anuncios").select("*").eq("id", anuncio["id"]).execute().data
     bajada, dias = 0.0, 0
@@ -95,7 +85,9 @@ def guardar(anuncio):
     if puntos >= UMBRAL_PUNTOS and not ya_avisado:
         motivo_aviso = f"Puntuacion {puntos}/100 - " + "; ".join(motivos)
     elif bajada >= UMBRAL_BAJADA:
-        motivo_aviso = f"Bajada del {bajada:.0f}% ({existente[0]['precio']:,} EUR -> {anuncio['precio']:,} EUR)".replace(",", ".")
+        motivo_aviso = f"Bajada del {bajada:.0f}%"
+    elif bajada_anunciada and not ya_avisado:
+        motivo_aviso = "El portal anuncia bajada de precio" + (f" (puntuacion {puntos}/100)" if puntos else "")
 
     if existente:
         db().table("anuncios").update(anuncio).eq("id", anuncio["id"]).execute()
@@ -121,7 +113,6 @@ def avisar_telegram(anuncio, motivo):
         f"Precio: {precio}{sup}{m2}\n"
         f"Motivo: {motivo}\n"
         + (f"Tambien en: {anuncio['tambien_en']}\n" if anuncio.get("tambien_en") else "")
-        + (f"Aviso: {anuncio['alertas']}\n" if anuncio.get("alertas") else "")
         + f"{anuncio.get('url') or ''}"
     )
     requests.post(
