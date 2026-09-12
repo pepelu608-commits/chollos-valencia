@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chollos Valencia</title>
+<style>
+  :root{--tinta:#1a1614;--papel:#ffffff;--hueso:#f6f4f2;--linea:#e2ddd8;--gris:#7a726c;--rojo:#c81d25;--rojo-suave:#fdeced;--verde:#1d7a4c}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--papel);color:var(--tinta);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5}
+  header{border-bottom:3px solid var(--rojo);padding:22px 24px 16px;display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  h1{font-size:23px;margin:0;letter-spacing:-.02em;font-weight:700}
+  h1 span{color:var(--rojo)}
+  .resumen{color:var(--gris);font-size:13px}
+  .filtros{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;padding:16px 24px;background:var(--hueso);border-bottom:1px solid var(--linea);position:sticky;top:0;z-index:5}
+  .campo{display:flex;flex-direction:column;gap:4px}
+  .campo label{font-size:12px;color:var(--gris)}
+  select,input{font:inherit;font-size:14px;padding:7px 9px;border:1px solid var(--linea);background:var(--papel);border-radius:3px;color:var(--tinta);min-width:130px}
+  input:focus,select:focus,button:focus-visible{outline:2px solid var(--rojo);outline-offset:1px}
+  button.limpiar{font:inherit;font-size:13px;background:none;border:none;color:var(--rojo);cursor:pointer;padding:8px 2px;text-decoration:underline}
+  main{padding:0 24px 60px}
+  .aviso{padding:40px 0;color:var(--gris);max-width:46ch}
+  table{border-collapse:collapse;width:100%;margin-top:4px}
+  th{text-align:left;font-size:12px;font-weight:600;color:var(--gris);padding:12px 10px;border-bottom:1px solid var(--linea);white-space:nowrap;cursor:pointer}
+  th:hover,th.activo{color:var(--rojo)}
+  td{padding:13px 10px;border-bottom:1px solid var(--linea);vertical-align:top}
+  tr.descartada{opacity:.38}
+  .titulo{font-weight:600;display:block;color:var(--tinta);text-decoration:none}
+  .titulo:hover{color:var(--rojo);text-decoration:underline}
+  .meta{font-size:12.5px;color:var(--gris);margin-top:2px}
+  .precio{font-weight:700;white-space:nowrap;font-size:16px}
+  .m2{white-space:nowrap}
+  .antes{color:var(--gris);text-decoration:line-through;font-size:12.5px;font-weight:400}
+  .dto{color:var(--verde);font-weight:600;white-space:nowrap}
+  .dto.caro{color:var(--gris);font-weight:400}
+  .puntos{display:inline-block;min-width:38px;text-align:center;padding:3px 7px;border-radius:3px;font-weight:700;font-size:13px;background:var(--hueso);color:var(--gris)}
+  .puntos.alto{background:var(--rojo);color:#fff}
+  .puntos.medio{background:var(--rojo-suave);color:var(--rojo)}
+  .motivos{font-size:12.5px;color:var(--gris);max-width:34ch}
+  .quitar{font:inherit;font-size:12.5px;background:none;border:1px solid var(--linea);border-radius:3px;padding:4px 9px;cursor:pointer;color:var(--gris);white-space:nowrap}
+  .quitar:hover{border-color:var(--rojo);color:var(--rojo)}
+  @media(max-width:760px){thead{display:none}tr{display:block;border-bottom:1px solid var(--linea);padding:14px 0}td{display:block;border:none;padding:2px 0}td[data-t]:before{content:attr(data-t) " ";color:var(--gris);font-size:12px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Chollos <span>Valencia</span></h1>
+  <div class="resumen" id="resumen">Cargando anuncios...</div>
+</header>
+<div class="filtros">
+  <div class="campo"><label for="f-zona">Zona</label><select id="f-zona"><option value="">Todas</option></select></div>
+  <div class="campo"><label for="f-tipo">Tipo</label><select id="f-tipo"><option value="">Todos</option><option value="vivienda">Vivienda</option><option value="local">Local</option></select></div>
+  <div class="campo"><label for="f-precio">Precio maximo</label><input id="f-precio" type="number" placeholder="350000" step="10000"></div>
+  <div class="campo"><label for="f-m2">Euros/m2 maximo</label><input id="f-m2" type="number" placeholder="2500" step="100"></div>
+  <div class="campo"><label for="f-puntos">Puntuacion minima</label><input id="f-puntos" type="number" placeholder="0" min="0" max="100" step="10"></div>
+  <div class="campo"><label for="f-descartados">Descartados</label><select id="f-descartados"><option value="no">Ocultar</option><option value="si">Mostrar</option></select></div>
+  <button class="limpiar" id="limpiar">Quitar filtros</button>
+</div>
+<main>
+  <div class="aviso" id="aviso">Cargando anuncios...</div>
+  <table id="tabla" hidden>
+    <thead><tr>
+      <th data-o="titulo">Anuncio</th><th data-o="precio">Precio</th><th data-o="precio_m2">Euros/m2</th>
+      <th data-o="descuento_pct">Frente a la zona</th><th data-o="puntos">Chollo</th><th data-o="fecha_alta">Visto</th><th></th>
+    </tr></thead>
+    <tbody id="cuerpo"></tbody>
+  </table>
+</main>
+<script>
+const SUPABASE_URL = "https://gclytaqegexluuwyrniw.supabase.co";
+const SUPABASE_KEY = "sb_publishable_43_uaQeXEkoyk5f68ty0nw_ZCNY1VmF";
+let datos = [];
+let orden = {campo:"puntos", desc:true};
+const eur = n => n == null ? "-" : n.toLocaleString("es-ES") + " EUR";
+const $ = id => document.getElementById(id);
+async function cargar(){
+  try{
+    const r = await fetch(SUPABASE_URL + "/rest/v1/anuncios?select=*&limit=2000", {headers:{apikey:SUPABASE_KEY, Authorization:"Bearer "+SUPABASE_KEY}});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    datos = await r.json();
+  }catch(e){
+    $("aviso").textContent = "No se han podido cargar los anuncios. Revisa los permisos de lectura en Supabase.";
+    return;
+  }
+  if(!datos.length){
+    $("aviso").textContent = "Todavia no hay anuncios guardados. El bot los ira anadiendo segun lleguen las alertas de los portales.";
+    $("resumen").textContent = "0 anuncios";
+    return;
+  }
+  [...new Set(datos.map(a => a.municipio).filter(Boolean))].sort().forEach(z => $("f-zona").append(new Option(z, z)));
+  $("aviso").hidden = true; $("tabla").hidden = false; pintar();
+}
+function filtrar(){
+  const zona = $("f-zona").value, tipo = $("f-tipo").value;
+  const pMax = +$("f-precio").value || Infinity, mMax = +$("f-m2").value || Infinity, pts = +$("f-puntos").value || 0;
+  const ver = $("f-descartados").value === "si";
+  return datos.filter(a => (!zona || a.municipio === zona) && (!tipo || a.tipo === tipo) &&
+    (a.precio ?? 0) <= pMax && (a.precio_m2 ?? 0) <= mMax && (a.puntos ?? 0) >= pts && (ver || !a.descartado));
+}
+function pintar(){
+  const lista = filtrar().sort((a,b) => {
+    const x = a[orden.campo], y = b[orden.campo];
+    if(x == null) return 1; if(y == null) return -1;
+    const c = typeof x === "string" ? x.localeCompare(y) : x - y;
+    return orden.desc ? -c : c;
+  });
+  $("resumen").textContent = lista.length + " de " + datos.length + " anuncios";
+  document.querySelectorAll("th[data-o]").forEach(th => th.classList.toggle("activo", th.dataset.o === orden.campo));
+  $("cuerpo").innerHTML = lista.map(a => {
+    const dto = a.descuento_pct;
+    const dtoTxt = dto == null ? "sin referencia aun" : dto > 0 ? dto.toFixed(0)+"% mas barato" : Math.abs(dto).toFixed(0)+"% mas caro";
+    const p = a.puntos ?? 0;
+    const clase = p >= 70 ? "alto" : p >= 40 ? "medio" : "";
+    const visto = a.fecha_alta ? new Date(a.fecha_alta).toLocaleDateString("es-ES",{day:"numeric",month:"short"}) : "-";
+    return '<tr class="' + (a.descartado ? "descartada" : "") + '">' +
+      '<td><a class="titulo" href="' + (a.url||"#") + '" target="_blank" rel="noopener">' + (a.titulo || "Anuncio") + '</a>' +
+      '<div class="meta">' + (a.municipio || "") + ' - ' + a.fuente + ' - ' + (a.superficie ? a.superficie+" m2" : "sin superficie") + '</div></td>' +
+      '<td data-t="Precio" class="precio">' + eur(a.precio) + (a.precio_anterior ? '<div class="antes">'+eur(a.precio_anterior)+'</div>' : "") + '</td>' +
+      '<td data-t="Euros/m2" class="m2">' + (a.precio_m2 ? eur(a.precio_m2) : "-") + (a.media_zona_m2 ? '<div class="meta">zona '+eur(a.media_zona_m2)+'</div>' : "") + '</td>' +
+      '<td data-t="Zona" class="dto ' + (dto > 0 ? "" : "caro") + '">' + dtoTxt + '</td>' +
+      '<td data-t="Chollo"><span class="puntos ' + clase + '">' + p + '</span><div class="motivos">' + (a.motivos || "") + '</div></td>' +
+      '<td data-t="Visto" class="meta">' + visto + '</td>' +
+      '<td><button class="quitar" data-id="' + a.id + '">' + (a.descartado ? "Recuperar" : "Descartar") + '</button></td></tr>';
+  }).join("");
+}
+document.addEventListener("click", async e => {
+  const th = e.target.closest("th[data-o]");
+  if(th){ const c = th.dataset.o; orden = {campo:c, desc: orden.campo === c ? !orden.desc : true}; return pintar(); }
+  const b = e.target.closest(".quitar");
+  if(!b) return;
+  const a = datos.find(x => x.id === b.dataset.id);
+  const nuevo = !a.descartado; a.descartado = nuevo; pintar();
+  await fetch(SUPABASE_URL + "/rest/v1/anuncios?id=eq." + encodeURIComponent(a.id), {
+    method:"PATCH",
+    headers:{apikey:SUPABASE_KEY, Authorization:"Bearer "+SUPABASE_KEY, "Content-Type":"application/json", Prefer:"return=minimal"},
+    body: JSON.stringify({descartado:nuevo})
+  }).catch(()=>{});
+});
+document.querySelectorAll(".filtros select, .filtros input").forEach(el => el.addEventListener("input", pintar));
+$("limpiar").addEventListener("click", () => {
+  document.querySelectorAll(".filtros input").forEach(i => i.value = "");
+  $("f-zona").value = ""; $("f-tipo").value = ""; $("f-descartados").value = "no"; pintar();
+});
+cargar();
+</script>
+</body>
+</html>
