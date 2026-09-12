@@ -1,6 +1,8 @@
 """Lee los emails de alerta de los portales y extrae los anuncios.
-Busca por fecha (ultimos dias), no por "no leido", asi que puedes abrir los correos sin problema."""
+No depende de la forma de las URLs (los portales usan enlaces de redireccion):
+busca bloques de texto que contengan un precio y coge el enlace mas cercano."""
 import email
+import hashlib
 import imaplib
 import os
 import re
@@ -9,15 +11,21 @@ from email.header import decode_header
 
 from bs4 import BeautifulSoup
 
-DIAS_ATRAS = int(os.getenv("DIAS_ATRAS", "3"))
+DIAS_ATRAS = int(os.getenv("DIAS_ATRAS", "5"))
 
 PORTALES = {
-    "idealista": {"remitente": "idealista", "dominio": "idealista.com"},
-    "fotocasa": {"remitente": "fotocasa", "dominio": "fotocasa.es"},
-    "habitaclia": {"remitente": "habitaclia", "dominio": "habitaclia.com"},
-    "pisos.com": {"remitente": "pisos.com", "dominio": "pisos.com"},
-    "yaencontre": {"remitente": "yaencontre", "dominio": "yaencontre.com"},
+    "idealista": "idealista",
+    "fotocasa": "fotocasa",
+    "habitaclia": "habitaclia",
+    "pisos.com": "pisos.com",
+    "yaencontre": "yaencontre",
 }
+
+TIPOS = r"(Piso|Bajo|Planta baja|Apartamento|\u00c1tico|Atico|D\u00faplex|Duplex|Estudio|Loft|Casa|Chalet|Adosad[oa]|Local|Nave|Oficina|Vivienda|Inmueble)"
+RE_PRECIO = re.compile(r"(\d{1,3}(?:\.\d{3})+|\d{5,7})\s*\u20ac")
+RE_SUP = re.compile(r"(\d{2,4})\s*m\s*[\u00b22]")
+RE_HAB = re.compile(r"(\d)\s*(?:hab|dorm)")
+RE_TIPO = re.compile(TIPOS, re.I)
 
 
 def _asunto(msg):
@@ -28,53 +36,80 @@ def _asunto(msg):
 
 
 def _html_del_mensaje(msg):
+    html = ""
     for parte in msg.walk():
         if parte.get_content_type() == "text/html":
             carga = parte.get_payload(decode=True)
-            return carga.decode(parte.get_content_charset() or "utf-8", errors="ignore")
-    return ""
+            if carga:
+                html += carga.decode(parte.get_content_charset() or "utf-8", errors="ignore")
+    return html
 
 
-def _extraer_anuncios(html, portal, dominio, es_bajada=False):
+def _municipio(texto):
+    m = re.search(r"\ben ([A-Z\u00c0-\u00ff][\w\u00c0-\u00ff'\.\- ]{2,40}?)(?:,|\.|\d|$)", texto)
+    if m:
+        return m.group(1).strip()
+    for barrio in ("Russafa", "Ruzafa", "El Carme", "El Pilar", "La Petxina", "Benimaclet",
+                   "Patraix", "Campanar", "Extramurs", "Algiros", "Quatre Carreres"):
+        if barrio.lower() in texto.lower():
+            return barrio
+    return "Valencia"
+
+
+def _enlace_cercano(nodo):
+    """Busca un enlace dentro del bloque o, si no, en sus hermanos anteriores."""
+    a = nodo.find("a", href=True)
+    if a:
+        return a["href"]
+    padre = nodo
+    for _ in range(3):
+        if not padre.parent:
+            break
+        padre = padre.parent
+        a = padre.find("a", href=True)
+        if a:
+            return a["href"]
+    return None
+
+
+def _extraer_anuncios(html, portal, es_bajada=False):
     soup = BeautifulSoup(html, "html.parser")
-    anuncios = {}
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if dominio not in href or not re.search(r"/inmueble/\d+|/vivienda/|/\d{6,}", href):
+    for etiqueta in soup(["style", "script"]):
+        etiqueta.decompose()
+    vistos = {}
+    # candidatos: cualquier nodo cuyo texto tenga un precio y no sea demasiado largo
+    for nodo in soup.find_all(["td", "div", "table", "tr", "p", "li"]):
+        texto = nodo.get_text(" ", strip=True)
+        if not texto or len(texto) > 400:
             continue
-        m = re.search(r"(\d{6,})", href)
-        if not m:
+        mp = RE_PRECIO.search(texto)
+        if not mp:
             continue
-        aid = f"{portal}-{m.group(1)}"
-        bloque = a
-        for _ in range(4):
-            if bloque.parent and len(bloque.parent.get_text(" ", strip=True)) < 600:
-                bloque = bloque.parent
-        texto = bloque.get_text(" ", strip=True)
-        precio = re.search(r"(\d{2,3}(?:\.\d{3})+|\d{5,7})\s*€", texto)
-        sup = re.search(r"(\d{2,4})\s*m[²2]", texto)
-        hab = re.search(r"(\d)\s*hab", texto)
-        titulo = re.search(r"(Piso|Bajo|Planta baja|Apartamento|Ático|Dúplex|Estudio|Loft|Casa|Chalet|Adosad[oa]|Local|Nave|Oficina)[^€]{0,80}", texto)
-        tipo = "local" if titulo and titulo.group(1) in ("Local", "Nave", "Oficina") else "vivienda"
-        anuncio = anuncios.setdefault(aid, {"id": aid, "fuente": portal, "url": href.split("?")[0], "tipo": tipo, "bajada_anunciada": es_bajada})
-        if precio and not anuncio.get("precio"):
-            anuncio["precio"] = int(precio.group(1).replace(".", ""))
-        if sup and not anuncio.get("superficie"):
-            anuncio["superficie"] = int(sup.group(1))
-        if hab and not anuncio.get("habitaciones"):
-            anuncio["habitaciones"] = int(hab.group(1))
-        if titulo and not anuncio.get("titulo"):
-            anuncio["titulo"] = titulo.group(0).strip()[:120]
-            anuncio["municipio"] = _municipio(titulo.group(0))
-        anuncio["texto"] = (anuncio.get("texto", "") + " " + texto)[:1500]
-        if es_bajada:
-            anuncio["bajada_anunciada"] = True
-    return [a for a in anuncios.values() if a.get("precio")]
-
-
-def _municipio(titulo):
-    m = re.search(r" en ([A-ZÀ-ÿ][\wÀ-ÿ' -]+?)(?:,|$| \d)", titulo)
-    return m.group(1).strip() if m else "Valencia"
+        precio = int(mp.group(1).replace(".", ""))
+        if precio < 20000 or precio > 3000000:
+            continue
+        msup = RE_SUP.search(texto)
+        mtipo = RE_TIPO.search(texto)
+        titulo = texto[:120]
+        clave = hashlib.md5(f"{portal}|{precio}|{msup.group(1) if msup else ''}|{_municipio(texto)}".encode()).hexdigest()[:16]
+        if clave in vistos:
+            continue
+        mhab = RE_HAB.search(texto)
+        tipo_txt = (mtipo.group(1).lower() if mtipo else "")
+        vistos[clave] = {
+            "id": f"{portal}-{clave}",
+            "fuente": portal,
+            "url": _enlace_cercano(nodo),
+            "tipo": "local" if tipo_txt in ("local", "nave", "oficina") else "vivienda",
+            "titulo": titulo,
+            "municipio": _municipio(texto),
+            "precio": precio,
+            "superficie": int(msup.group(1)) if msup else None,
+            "habitaciones": int(mhab.group(1)) if mhab else None,
+            "texto": texto[:1500],
+            "bajada_anunciada": es_bajada,
+        }
+    return list(vistos.values())
 
 
 def obtener():
@@ -83,12 +118,20 @@ def obtener():
     correo.select("INBOX")
     desde = (datetime.utcnow() - timedelta(days=DIAS_ATRAS)).strftime("%d-%b-%Y")
     resultado = []
-    for portal, cfg in PORTALES.items():
-        _, datos = correo.search(None, f'(SINCE {desde} FROM "{cfg["remitente"]}")')
-        for num in datos[0].split():
+    for portal, remitente in PORTALES.items():
+        try:
+            _, datos = correo.search(None, f'(SINCE {desde} FROM "{remitente}")')
+        except Exception as e:
+            print(f"  {portal}: error al buscar: {e}")
+            continue
+        nums = datos[0].split()
+        print(f"  {portal}: {len(nums)} correos")
+        for num in nums:
             _, contenido = correo.fetch(num, "(BODY.PEEK[])")
             msg = email.message_from_bytes(contenido[0][1])
             es_bajada = bool(re.search(r"bajada de precio|baja de precio|ha bajado", _asunto(msg), re.I))
-            resultado.extend(_extraer_anuncios(_html_del_mensaje(msg), portal, cfg["dominio"], es_bajada))
+            encontrados = _extraer_anuncios(_html_del_mensaje(msg), portal, es_bajada)
+            print(f"    '{_asunto(msg)[:60]}' -> {len(encontrados)} anuncios")
+            resultado.extend(encontrados)
     correo.logout()
     return resultado
