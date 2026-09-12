@@ -1,11 +1,15 @@
-"""Lee los emails de alerta de los portales y extrae los anuncios."""
+"""Lee los emails de alerta de los portales y extrae los anuncios.
+Busca por fecha (ultimos dias), no por "no leido", asi que puedes abrir los correos sin problema."""
 import email
 import imaplib
 import os
 import re
+from datetime import datetime, timedelta
 from email.header import decode_header
 
 from bs4 import BeautifulSoup
+
+DIAS_ATRAS = int(os.getenv("DIAS_ATRAS", "3"))
 
 PORTALES = {
     "idealista": {"remitente": "idealista", "dominio": "idealista.com"},
@@ -63,6 +67,8 @@ def _extraer_anuncios(html, portal, dominio, es_bajada=False):
             anuncio["titulo"] = titulo.group(0).strip()[:120]
             anuncio["municipio"] = _municipio(titulo.group(0))
         anuncio["texto"] = (anuncio.get("texto", "") + " " + texto)[:1500]
+        if es_bajada:
+            anuncio["bajada_anunciada"] = True
     return [a for a in anuncios.values() if a.get("precio")]
 
 
@@ -75,14 +81,14 @@ def obtener():
     correo = imaplib.IMAP4_SSL("imap.gmail.com")
     correo.login(os.environ["GMAIL_USER"], os.environ["GMAIL_APP_PASSWORD"])
     correo.select("INBOX")
+    desde = (datetime.utcnow() - timedelta(days=DIAS_ATRAS)).strftime("%d-%b-%Y")
     resultado = []
     for portal, cfg in PORTALES.items():
-        _, datos = correo.search(None, f'(UNSEEN FROM "{cfg["remitente"]}")')
+        _, datos = correo.search(None, f'(SINCE {desde} FROM "{cfg["remitente"]}")')
         for num in datos[0].split():
-            _, contenido = correo.fetch(num, "(RFC822)")
+            _, contenido = correo.fetch(num, "(BODY.PEEK[])")
             msg = email.message_from_bytes(contenido[0][1])
             es_bajada = bool(re.search(r"bajada de precio|baja de precio|ha bajado", _asunto(msg), re.I))
             resultado.extend(_extraer_anuncios(_html_del_mensaje(msg), portal, cfg["dominio"], es_bajada))
-            correo.store(num, "+FLAGS", "\\Seen")
     correo.logout()
     return resultado
