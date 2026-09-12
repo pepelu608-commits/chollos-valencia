@@ -1,6 +1,5 @@
 """Lee los emails de alerta de los portales y extrae los anuncios.
-No depende de la forma de las URLs (los portales usan enlaces de redireccion):
-busca bloques de texto que contengan un precio y coge el enlace mas cercano."""
+Aprovecha que los propios correos ya traen euros/m2 y el barrio."""
 import email
 import hashlib
 import imaplib
@@ -21,15 +20,28 @@ PORTALES = {
     "yaencontre": "yaencontre",
 }
 
-TIPOS = "(Piso|Bajo|Planta baja|Apartamento|Ático|Atico|Dúplex|Duplex|Estudio|Loft|Casa|Chalet|Adosado|Adosada|Local|Nave|Oficina|Vivienda|Inmueble)"
-RE_PRECIO = re.compile("(\\d{1,3}(?:\\.\\d{3})+|\\d{5,7})\\s*€")
-RE_SUP = re.compile("(\\d{2,4})\\s*m\\s*[²2]")
-RE_HAB = re.compile("(\\d)\\s*(?:hab|dorm)")
-RE_TIPO = re.compile(TIPOS, re.I)
-RE_MUNI = re.compile("\\ben ([A-ZÀ-ÿ][\\wÀ-ÿ'.\\- ]{2,40}?)(?:,|\\.|\\d|$)")
+BARRIOS = [
+    "Russafa", "Ruzafa", "El Carme", "El Carmen", "El Pilar", "La Petxina", "Benimaclet",
+    "Patraix", "Campanar", "Extramurs", "Algiros", "Quatre Carreres", "El Cabanyal",
+    "El Canyamelar", "La Roqueta", "El Mercat", "La Xerea", "Arrancapins", "Sant Francesc",
+    "La Seu", "Jesus", "Jesús", "Camins al Grau", "Ayora", "Albors", "La Creu del Grau",
+    "Penya-roja", "Malilla", "Sant Marcelli", "Sant Marcel·li", "Tres Forques", "Safranar",
+    "Vara de Quart", "Nou Moles", "Soternes", "Marxalenes", "Morvedre", "Trinitat",
+    "Exposicio", "Exposició", "Mestalla", "Ciutat Universitaria", "Benicalap", "Torrefiel",
+    "Orriols", "Sant Llorens", "Sant Antoni", "Natzaret", "La Punta", "Castellar",
+    "Pla del Real", "Gran Via", "El Pla del Remei", "Ciutat Vella", "Poblats Maritims",
+    "Benimamet", "Beteró", "Betero", "La Malva-rosa", "Els Orriols", "Sant Pau",
+]
 
-BARRIOS = ("Russafa", "Ruzafa", "El Carme", "El Pilar", "La Petxina", "Benimaclet",
-           "Patraix", "Campanar", "Extramurs", "Algiros", "Quatre Carreres", "El Cabanyal")
+RE_PRECIO = re.compile("(\\d{1,3}(?:\\.\\d{3})+|\\d{5,7})\\s*€")
+RE_M2_DIRECTO = re.compile("(\\d{1,2}\\.?\\d{3})\\s*€\\s*/\\s*m")
+RE_SUP = re.compile("(\\d{2,4})\\s*m\\s*[²2]")
+RE_HAB = re.compile("(\\d)\\s*hab")
+RE_TIPO = re.compile("(Piso|Bajo|Planta baja|Apartamento|Ático|Atico|Dúplex|Duplex|Estudio|Loft|Casa|Chalet|Adosado|Adosada|Local|Nave|Oficina)", re.I)
+# "calle X, Barrio en Valencia" -> Barrio
+RE_BARRIO_EN = re.compile(",\\s*([A-ZÀ-ÿ][\\wÀ-ÿ'·\\-\\. ]{2,35}?)\\s+en\\s+Val[eè]ncia", re.I)
+# frases que delatan que el bloque es parte del filtro, no un anuncio
+RUIDO = re.compile("sin otros filtros|hasta \\d|ver todos|modificar|darse de baja|preferencias", re.I)
 
 
 def _asunto(msg):
@@ -49,12 +61,15 @@ def _html_del_mensaje(msg):
     return html
 
 
-def _municipio(texto):
-    m = RE_MUNI.search(texto)
+def _barrio(texto):
+    m = RE_BARRIO_EN.search(texto)
     if m:
-        return m.group(1).strip()
+        nombre = m.group(1).strip()
+        if 2 < len(nombre) < 36 and not nombre.lower().startswith(("calle", "avenida", "plaza", "camino")):
+            return nombre
+    bajo = texto.lower()
     for barrio in BARRIOS:
-        if barrio.lower() in texto.lower():
+        if barrio.lower() in bajo:
             return barrio
     return "Valencia"
 
@@ -81,20 +96,31 @@ def _extraer_anuncios(html, portal, es_bajada=False):
     vistos = {}
     for nodo in soup.find_all(["td", "div", "table", "tr", "p", "li"]):
         texto = nodo.get_text(" ", strip=True)
-        if not texto or len(texto) > 400:
+        if not texto or len(texto) > 400 or RUIDO.search(texto):
             continue
-        mp = RE_PRECIO.search(texto)
-        if not mp:
-            continue
-        precio = int(mp.group(1).replace(".", ""))
-        if precio < 20000 or precio > 3000000:
+        precios = RE_PRECIO.findall(texto)
+        if not precios:
             continue
         msup = RE_SUP.search(texto)
-        mtipo = RE_TIPO.search(texto)
+        mm2 = RE_M2_DIRECTO.search(texto)
         mhab = RE_HAB.search(texto)
-        muni = _municipio(texto)
-        sup = msup.group(1) if msup else ""
-        clave = hashlib.md5((portal + "|" + str(precio) + "|" + sup + "|" + muni).encode()).hexdigest()[:16]
+        mtipo = RE_TIPO.search(texto)
+        # un anuncio de verdad trae, ademas del precio, metros o euros/m2 o habitaciones
+        if not (msup or mm2 or mhab):
+            continue
+        # si hay varios precios (rebajado), el vigente es el mas bajo
+        valores = [int(p.replace(".", "")) for p in precios]
+        valores = [v for v in valores if 20000 <= v <= 3000000]
+        if not valores:
+            continue
+        precio = min(valores)
+        anterior = max(valores) if max(valores) > precio else None
+        sup = int(msup.group(1)) if msup else None
+        m2 = int(mm2.group(1).replace(".", "")) if mm2 else None
+        if not sup and m2 and precio:
+            sup = round(precio / m2)
+        barrio = _barrio(texto)
+        clave = hashlib.md5((portal + "|" + str(precio) + "|" + str(sup) + "|" + barrio).encode()).hexdigest()[:16]
         if clave in vistos:
             continue
         tipo_txt = mtipo.group(1).lower() if mtipo else ""
@@ -104,9 +130,10 @@ def _extraer_anuncios(html, portal, es_bajada=False):
             "url": _enlace_cercano(nodo),
             "tipo": "local" if tipo_txt in ("local", "nave", "oficina") else "vivienda",
             "titulo": texto[:120],
-            "municipio": muni,
+            "municipio": barrio,
             "precio": precio,
-            "superficie": int(sup) if sup else None,
+            "precio_anterior": anterior,
+            "superficie": sup,
             "habitaciones": int(mhab.group(1)) if mhab else None,
             "texto": texto[:1500],
             "bajada_anunciada": es_bajada,
@@ -134,7 +161,7 @@ def obtener():
             asunto = _asunto(msg)
             es_bajada = bool(re.search("bajada de precio|baja de precio|ha bajado", asunto, re.I))
             encontrados = _extraer_anuncios(_html_del_mensaje(msg), portal, es_bajada)
-            print("    " + asunto[:60] + " -> " + str(len(encontrados)) + " anuncios")
+            print("    " + asunto[:55] + " -> " + str(len(encontrados)))
             resultado.extend(encontrados)
     correo.logout()
     return resultado
